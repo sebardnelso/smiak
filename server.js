@@ -58,67 +58,46 @@ app.post('/login', async (req, res) => {
 const client = new Client();
 client.ftp.verbose = true;
 
-// Ruta para obtener los precios con imágenes desde FTP
 app.get('/precios', async (req, res) => {
   const searchTerm = req.query.q || '';  // Obtenemos el parámetro de búsqueda desde la URL
 
   const query = `
-    SELECT smk_art.id, smk_art.denominac, smk_art.precio
+    SELECT smk_art.id, smk_art.denominac, smk_art.precio, smk_fotos.foto
     FROM smk_art
+    LEFT JOIN smk_fotos ON smk_art.id = smk_fotos.id
     WHERE smk_art.denominac LIKE ?
   `;
 
   let connection;
   try {
-    connection = await getDBConnection();  // Obtenemos la conexión a la base de datos
+    connection = await getDBConnection();  // Obtén la conexión a la base de datos
     const [results] = await connection.execute(query, [`%${searchTerm}%`]);
-    const preciosConImagenes = [];
 
-    // Conexión al FTP
-    await client.access({
-      host: 'ftp.spowerinfo.com.ar',
-      user: 'ausolpub.spowerinfo.com.ar',
-      password: 'ausol'
-    });
-
-    // Iteramos sobre cada artículo
-    for (const item of results) {
-      const filePath = `/smiak/${item.id}.jpg`;  // Suponiendo que las imágenes son .jpg
-      const localFilePath = path.join(__dirname, `./temp/${item.id}.jpg`);
-
-      let imageBase64 = null;
-      try {
-        if (!fs.existsSync(path.dirname(localFilePath))) {
-          fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
-        }
-        await client.downloadTo(localFilePath, filePath);
-        const imageBuffer = fs.readFileSync(localFilePath);
-        imageBase64 = imageBuffer.toString('base64');  // Convertimos la imagen a base64
-      } catch (err) {
-        console.error(`Error al descargar la imagen para el artículo ${item.id}:`, err);
-      }
-
-      preciosConImagenes.push({
+    const preciosConImagenes = results.map(item => {
+      // Convertir el Buffer de la imagen a base64
+      const imageBuffer = item.foto ? item.foto.toString('base64') : null;
+      console.log(imageBuffer)
+      
+      return {
         id: item.id,
         denominac: item.denominac,
         precio: item.precio,
-        imagen: imageBase64 || null  // Si no hay imagen, asignamos null
-      });
-    }
+        imagen: imageBuffer // Aquí estamos pasando el Buffer convertido a base64
+      };
+    });
 
-    // Cerramos la conexión con el FTP
-    client.close();
-
-    // Enviamos la respuesta con los precios y las imágenes (si existen)
-    res.status(200).send(preciosConImagenes);
-
+    // Enviar la respuesta con los precios y los datos binarios de las imágenes
+    res.status(200).json(preciosConImagenes);
   } catch (err) {
     console.error('Error al obtener los precios e imágenes:', err);
     res.status(500).send({ error: 'Error en el servidor' });
   } finally {
-    if (connection) connection.release();  // Liberamos la conexión de la base de datos
+    if (connection) connection.release();  // Liberamos la conexión
   }
 });
+
+
+
 
 // Iniciar el servidor
 const PORT = 3000;
