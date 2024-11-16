@@ -1,10 +1,11 @@
 const express = require('express');
-const mysql = require('mysql2/promise');
+const mysql = require('mysql2/promise'); // Corrección en la importación
 const cors = require('cors');
 const { Client } = require('basic-ftp');
 const path = require('path');
 const fs = require('fs');
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
@@ -17,90 +18,78 @@ const dbConfig = {
   port: 3306
 };
 
-// Creación de un pool de conexiones MySQL (mejor manejo de conexiones)
-const pool = mysql.createPool(dbConfig);
-
-// Función para obtener una conexión del pool
-const getDBConnection = async () => {
-  try {
-    const connection = await pool.getConnection();
-    console.log('Conexión exitosa a la base de datos MySQL');
-    return connection;
-  } catch (err) {
-    console.error('Error obteniendo conexión de la base de datos:', err);
-    throw err;
-  }
-};
+// Crear conexión MySQL
+const db = mysql.createPool(dbConfig); // Usar pool para conexiones eficientes
 
 // Ruta para autenticación de usuario
 app.post('/login', async (req, res) => {
   const { nombre, pass } = req.body;
   const query = 'SELECT * FROM smk_users WHERE nombre = ? AND pass = ?';
 
-  let connection;
   try {
-    connection = await getDBConnection();  // Obtenemos la conexión
-    const [results] = await connection.execute(query, [nombre, pass]);
+    const [results] = await db.query(query, [nombre, pass]);
     if (results.length > 0) {
       res.status(200).send({ success: true, user: results[0] });
     } else {
       res.status(401).send({ success: false, message: 'Credenciales incorrectas' });
     }
   } catch (err) {
-    res.status(500).send({ error: 'Error en el servidor' });
     console.error('Error en la autenticación:', err);
-  } finally {
-    if (connection) connection.release();  // Liberamos la conexión
+    res.status(500).send({ error: 'Error en el servidor' });
   }
 });
 
-// Conexión al FTP
-const client = new Client();
-client.ftp.verbose = true;
 
 app.get('/precios', async (req, res) => {
-  const searchTerm = req.query.q || '';  // Obtenemos el parámetro de búsqueda desde la URL
+  const searchTerm = req.query.q || ''; // Parámetro de búsqueda
 
   const query = `
-    SELECT smk_art.id, smk_art.denominac, smk_art.precio, smk_fotos.foto
+    SELECT smk_art.id, smk_art.denominac, smk_art.precio
     FROM smk_art
-    LEFT JOIN smk_fotos ON smk_art.id = smk_fotos.id
     WHERE smk_art.denominac LIKE ?
   `;
 
-  let connection;
   try {
-    connection = await getDBConnection();  // Obtén la conexión a la base de datos
-    const [results] = await connection.execute(query, [`%${searchTerm}%`]);
-
-    const preciosConImagenes = results.map(item => {
-      // Convertir el Buffer de la imagen a base64
-      const imageBuffer = item.foto ? item.foto.toString('base64') : null;
-      console.log(imageBuffer)
-      
-      return {
-        id: item.id,
-        denominac: item.denominac,
-        precio: item.precio,
-        imagen: imageBuffer // Aquí estamos pasando el Buffer convertido a base64
-      };
-    });
-
-    // Enviar la respuesta con los precios y los datos binarios de las imágenes
-    res.status(200).json(preciosConImagenes);
+    const [results] = await db.execute(query, [`%${searchTerm}%`]);
+    res.status(200).send(results); // Retornamos los precios sin imágenes
   } catch (err) {
-    console.error('Error al obtener los precios e imágenes:', err);
-    res.status(500).send({ error: 'Error en el servidor' });
-  } finally {
-    if (connection) connection.release();  // Liberamos la conexión
+    console.error('Error al obtener precios:', err);
+    res.status(500).send({ error: 'Error al obtener precios' });
   }
 });
+app.get('/imagen/:id', async (req, res) => {
+  const id = req.params.id; // ID del artículo
+  const client = new Client();
+  client.ftp.verbose = true;
 
+  try {
+    await client.access({
+      host: 'ftp.spowerinfo.com.ar',
+      user: 'ausolpub.spowerinfo.com.ar',
+      password: 'ausol'
+    });
 
+    const filePath = `/smiak/${id}.jpg`; // Ruta en el servidor FTP
+    const localFilePath = path.join(__dirname, `./temp/${id}.jpg`);
 
+    if (!fs.existsSync(path.dirname(localFilePath))) {
+      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
+    }
+
+    await client.downloadTo(localFilePath, filePath); // Descargamos la imagen
+    const imageBuffer = fs.readFileSync(localFilePath);
+    const imageBase64 = imageBuffer.toString('base64'); // Convertimos a Base64
+    res.status(200).send({ id, imagen: imageBase64 });
+  } catch (err) {
+    console.error(`Error al descargar imagen para el ID ${id}:`, err);
+    res.status(404).send({ id, imagen: null }); // Si no hay imagen, retornamos null
+  } finally {
+    client.close(); // Cerramos la conexión FTP
+  }
+});
 
 // Iniciar el servidor
 const PORT = 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en el puerto ${PORT}`);
+  console.log(`Servidor en puerto ${PORT}`);
 });
