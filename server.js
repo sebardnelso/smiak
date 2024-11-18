@@ -43,50 +43,56 @@ app.post('/login', async (req, res) => {
 app.get('/precios', async (req, res) => {
   const searchTerm = req.query.q || ''; // Parámetro de búsqueda
 
+  // Dividir el término de búsqueda en palabras
+  const keywords = searchTerm.split(' ').filter((word) => word.trim() !== '');
+
+  // Crear condiciones dinámicas para cada palabra clave
+  const conditions = keywords.map(() => 'smk_art.denominac LIKE ?').join(' AND ');
   const query = `
     SELECT smk_art.id, smk_art.denominac, smk_art.precio
     FROM smk_art
-    WHERE smk_art.denominac LIKE ?
+    WHERE ${conditions}
   `;
 
+  // Mapear palabras clave con comodines
+  const params = keywords.map((word) => `%${word}%`);
+
   try {
-    const [results] = await db.execute(query, [`%${searchTerm}%`]);
-    res.status(200).send(results); // Retornamos los precios sin imágenes
+    const [results] = await db.execute(query, params);
+    res.status(200).send(results); // Retornamos los precios
   } catch (err) {
     console.error('Error al obtener precios:', err);
     res.status(500).send({ error: 'Error al obtener precios' });
   }
 });
+
+
+
 app.get('/imagen/:id', async (req, res) => {
-  const id = req.params.id; // ID del artículo
-  const client = new Client();
-  client.ftp.verbose = true;
+  const id = req.params.id;
 
   try {
-    await client.access({
-      host: 'ftp.spowerinfo.com.ar',
-      user: 'ausolpub.spowerinfo.com.ar',
-      password: 'ausol'
-    });
+    const query = `
+      SELECT foto
+      FROM smk_fotos
+      WHERE id = ?
+    `;
+    const [results] = await db.execute(query, [id]);
 
-    const filePath = `/smiak/${id}.jpg`; // Ruta en el servidor FTP
-    const localFilePath = path.join(__dirname, `./temp/${id}.jpg`);
-
-    if (!fs.existsSync(path.dirname(localFilePath))) {
-      fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
+    if (results.length > 0) {
+      const base64Image = results[0].foto;
+      res.status(200).json({ id, imagen: `data:image/jpeg;base64,${base64Image}` });
+    } else {
+      res.status(404).json({ id, imagen: null });
     }
-
-    await client.downloadTo(localFilePath, filePath); // Descargamos la imagen
-    const imageBuffer = fs.readFileSync(localFilePath);
-    const imageBase64 = imageBuffer.toString('base64'); // Convertimos a Base64
-    res.status(200).send({ id, imagen: imageBase64 });
   } catch (err) {
-    console.error(`Error al descargar imagen para el ID ${id}:`, err);
-    res.status(404).send({ id, imagen: null }); // Si no hay imagen, retornamos null
-  } finally {
-    client.close(); // Cerramos la conexión FTP
+    console.error(`Error al obtener imagen para el ID ${id}:`, err);
+    res.status(500).json({ error: 'Error al obtener la imagen' });
   }
 });
+
+
+
 
 // Iniciar el servidor
 const PORT = 3000;
